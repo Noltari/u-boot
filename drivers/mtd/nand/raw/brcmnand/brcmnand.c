@@ -40,6 +40,24 @@
 static int wp_on = 1;
 module_param(wp_on, int, 0444);
 
+#ifndef CONFIG_SYS_NAND_DRIVER_ECC_LAYOUT
+static struct nand_ecclayout brcmnand_oob_16 = {
+	.eccbytes = 3,
+	.eccpos = {6, 7, 8},
+	.oobfree = {
+		{.offset = 0,
+		 .length = 5},
+		{.offset = 9,
+		 .length = 7} }
+};
+#endif /* CONFIG_SYS_NAND_DRIVER_ECC_LAYOUT */
+
+#if 1
+#define nanddbg(...)
+#else
+#define nanddbg(...) dev_printk(__VA_ARGS__)
+#endif
+
 /***********************************************************************
  * Definitions
  ***********************************************************************/
@@ -101,6 +119,7 @@ enum {
 	BRCMNAND_HAS_PREFETCH			= BIT(1),
 	BRCMNAND_HAS_CACHE_MODE			= BIT(2),
 	BRCMNAND_HAS_WP				= BIT(3),
+	BRCMNAND_HAS_PARTIAL_PAGE		= BIT(4),
 };
 
 struct brcmnand_controller {
@@ -223,6 +242,36 @@ enum brcmnand_reg {
 	BRCMNAND_FC_BASE,
 };
 
+/* BRCMNAND v2.1-2.2 */
+static const u16 brcmnand_regs_v21[] = {
+	[BRCMNAND_CMD_START]		=  0x04,
+	[BRCMNAND_CMD_EXT_ADDRESS]	=  0x08,
+	[BRCMNAND_CMD_ADDRESS]		=  0x0c,
+	[BRCMNAND_INTFC_STATUS]		=  0x5c,
+	[BRCMNAND_CS_SELECT]		=  0x14,
+	[BRCMNAND_CS_XOR]		=  0x18,
+	[BRCMNAND_LL_OP]		=     0,
+	[BRCMNAND_CS0_BASE]		=  0x40,
+	[BRCMNAND_CS1_BASE]		=     0,
+	[BRCMNAND_CORR_THRESHOLD]	=     0,
+	[BRCMNAND_CORR_THRESHOLD_EXT]	=     0,
+	[BRCMNAND_UNCORR_COUNT]		=     0,
+	[BRCMNAND_CORR_COUNT]		=     0,
+	[BRCMNAND_CORR_EXT_ADDR]	=  0x60,
+	[BRCMNAND_CORR_ADDR]		=  0x64,
+	[BRCMNAND_UNCORR_EXT_ADDR]	=  0x68,
+	[BRCMNAND_UNCORR_ADDR]		=  0x6c,
+	[BRCMNAND_SEMAPHORE]		=  0x50,
+	[BRCMNAND_ID]			=  0x54,
+	[BRCMNAND_ID_EXT]		=     0,
+	[BRCMNAND_LL_RDATA]		=     0,
+	[BRCMNAND_OOB_READ_BASE]	=  0x20,
+	[BRCMNAND_OOB_READ_10_BASE]	=     0,
+	[BRCMNAND_OOB_WRITE_BASE]	=  0x30,
+	[BRCMNAND_OOB_WRITE_10_BASE]	=     0,
+	[BRCMNAND_FC_BASE]		= 0x200,
+};
+
 /* BRCMNAND v4.0 */
 static const u16 brcmnand_regs_v40[] = {
 	[BRCMNAND_CMD_START]		=  0x04,
@@ -283,7 +332,7 @@ static const u16 brcmnand_regs_v50[] = {
 	[BRCMNAND_FC_BASE]		= 0x200,
 };
 
-/* BRCMNAND v6.0 - v7.1 */
+/* BRCMNAND v6.0 - v7.0 */
 static const u16 brcmnand_regs_v60[] = {
 	[BRCMNAND_CMD_START]		=  0x04,
 	[BRCMNAND_CMD_EXT_ADDRESS]	=  0x08,
@@ -443,12 +492,18 @@ enum {
 
 static inline u32 nand_readreg(struct brcmnand_controller *ctrl, u32 offs)
 {
-	return brcmnand_readl(ctrl->nand_base + offs);
+	u32 val = brcmnand_readl(ctrl->nand_base + offs);
+
+	nanddbg(ctrl->dev, "%s: offs=%x val=%x\n", __func__, offs, val);
+
+	return val;
 }
 
 static inline void nand_writereg(struct brcmnand_controller *ctrl, u32 offs,
 				 u32 val)
 {
+	nanddbg(ctrl->dev, "%s: offs=%x val=%x\n", __func__, offs, val);
+
 	brcmnand_writel(val, ctrl->nand_base + offs);
 }
 
@@ -456,12 +511,15 @@ static int brcmnand_revision_init(struct brcmnand_controller *ctrl)
 {
 	static const unsigned int block_sizes_v6[] = { 8, 16, 128, 256, 512, 1024, 2048, 0 };
 	static const unsigned int block_sizes_v4[] = { 16, 128, 8, 512, 256, 1024, 2048, 0 };
-	static const unsigned int page_sizes[] = { 512, 2048, 4096, 8192, 0 };
+	static const unsigned int block_sizes_v3[] = { 16, 128, 8, 512, 256, 0 };
+	static const unsigned int page_sizes_v3_4[] = { 512, 2048, 4096, 8192, 0 };
+	static const unsigned int page_sizes_v3_3[] = { 512, 2048, 4096, 0 };
 
 	ctrl->nand_version = nand_readreg(ctrl, 0) & 0xffff;
 
-	/* Only support v4.0+? */
-	if (ctrl->nand_version < 0x0400) {
+	/* Only support v2.1-2.2 and v4.0+ */
+	if ((ctrl->nand_version < 0x0400) &&
+	    (ctrl->nand_version < 0x0201 || ctrl->nand_version > 0x0202)) {
 		dev_err(ctrl->dev, "version %#x not supported\n",
 			ctrl->nand_version);
 		return -ENODEV;
@@ -478,6 +536,8 @@ static int brcmnand_revision_init(struct brcmnand_controller *ctrl)
 		ctrl->reg_offsets = brcmnand_regs_v50;
 	else if (ctrl->nand_version >= 0x0400)
 		ctrl->reg_offsets = brcmnand_regs_v40;
+	else if (ctrl->nand_version >= 0x0201)
+		ctrl->reg_offsets = brcmnand_regs_v21;
 
 	/* Chip-select stride */
 	if (ctrl->nand_version >= 0x0701)
@@ -491,8 +551,9 @@ static int brcmnand_revision_init(struct brcmnand_controller *ctrl)
 	} else {
 		ctrl->cs_offsets = brcmnand_cs_offsets;
 
-		/* v5.0 and earlier has a different CS0 offset layout */
-		if (ctrl->nand_version <= 0x0500)
+		/* v4.0-5.0 has a different CS0 offset layout */
+		if (ctrl->nand_version >= 0x0400 &&
+		    ctrl->nand_version <= 0x0500)
 			ctrl->cs0_offsets = brcmnand_cs_offsets_cs0;
 	}
 
@@ -502,11 +563,17 @@ static int brcmnand_revision_init(struct brcmnand_controller *ctrl)
 		ctrl->max_page_size = 16 * 1024;
 		ctrl->max_block_size = 2 * 1024 * 1024;
 	} else {
-		ctrl->page_sizes = page_sizes;
+		if (ctrl->nand_version >= 0x0304)
+			ctrl->page_sizes = page_sizes_v3_4;
+		else
+			ctrl->page_sizes = page_sizes_v3_3;
+
 		if (ctrl->nand_version >= 0x0600)
 			ctrl->block_sizes = block_sizes_v6;
-		else
+		else if (ctrl->nand_version >= 0x0400)
 			ctrl->block_sizes = block_sizes_v4;
+		else
+			ctrl->block_sizes = block_sizes_v3;
 
 		if (ctrl->nand_version < 0x0400) {
 			ctrl->max_page_size = 4096;
@@ -547,24 +614,95 @@ static int brcmnand_revision_init(struct brcmnand_controller *ctrl)
 #endif /* __UBOOT__ */
 		ctrl->features |= BRCMNAND_HAS_WP;
 
+	if (ctrl->nand_version >= 0x0400)
+		ctrl->features |= BRCMNAND_HAS_PARTIAL_PAGE;
+
 	return 0;
+}
+
+static inline char* reg2str(enum brcmnand_reg reg)
+{
+	switch (reg)
+	{
+		case BRCMNAND_CMD_START:
+			return "BRCMNAND_CMD_START";
+		case BRCMNAND_CMD_EXT_ADDRESS:
+			return "BRCMNAND_CMD_EXT_ADDRESS";
+		case BRCMNAND_CMD_ADDRESS:
+			return "BRCMNAND_CMD_ADDRESS";
+		case BRCMNAND_INTFC_STATUS:
+			return "BRCMNAND_INTFC_STATUS";
+		case BRCMNAND_CS_SELECT:
+			return "BRCMNAND_CS_SELECT";
+		case BRCMNAND_CS_XOR:
+			return "BRCMNAND_CS_XOR";
+		case BRCMNAND_LL_OP:
+			return "BRCMNAND_LL_OP";
+		case BRCMNAND_CS0_BASE:
+			return "BRCMNAND_CS0_BASE";
+		case BRCMNAND_CS1_BASE:
+			return "BRCMNAND_CS1_BASE";
+		case BRCMNAND_CORR_THRESHOLD:
+			return "BRCMNAND_CORR_THRESHOLD";
+		case BRCMNAND_CORR_THRESHOLD_EXT:
+			return "BRCMNAND_CORR_THRESHOLD_EXT";
+		case BRCMNAND_UNCORR_COUNT:
+			return "BRCMNAND_UNCORR_COUNT";
+		case BRCMNAND_CORR_COUNT:
+			return "BRCMNAND_CORR_COUNT";
+		case BRCMNAND_CORR_EXT_ADDR:
+			return "BRCMNAND_CORR_EXT_ADDR";
+		case BRCMNAND_CORR_ADDR:
+			return "BRCMNAND_CORR_ADDR";
+		case BRCMNAND_UNCORR_EXT_ADDR:
+			return "BRCMNAND_UNCORR_EXT_ADDR";
+		case BRCMNAND_UNCORR_ADDR:
+			return "BRCMNAND_UNCORR_ADDR";
+		case BRCMNAND_SEMAPHORE:
+			return "BRCMNAND_SEMAPHORE";
+		case BRCMNAND_ID:
+			return "BRCMNAND_ID";
+		case BRCMNAND_ID_EXT:
+			return "BRCMNAND_ID_EXT";
+		case BRCMNAND_LL_RDATA:
+			return "BRCMNAND_LL_RDATA";
+		case BRCMNAND_OOB_READ_BASE:
+			return "BRCMNAND_OOB_READ_BASE";
+		case BRCMNAND_OOB_READ_10_BASE:
+			return "BRCMNAND_OOB_READ_10_BASE";
+		case BRCMNAND_OOB_WRITE_BASE:
+			return "BRCMNAND_OOB_WRITE_BASE";
+		case BRCMNAND_OOB_WRITE_10_BASE:
+			return "BRCMNAND_OOB_WRITE_10_BASE";
+		case BRCMNAND_FC_BASE:
+			return "BRCMNAND_FC_BASE";
+	}
+
+	return "unkown";
 }
 
 static inline u32 brcmnand_read_reg(struct brcmnand_controller *ctrl,
 		enum brcmnand_reg reg)
 {
 	u16 offs = ctrl->reg_offsets[reg];
+	u32 val;
 
 	if (offs)
-		return nand_readreg(ctrl, offs);
+		val = nand_readreg(ctrl, offs);
 	else
-		return 0;
+		val = 0;
+
+	nanddbg(ctrl->dev, "%s: reg=%s val=%x\n", __func__, reg2str(reg), val);
+
+	return val;
 }
 
 static inline void brcmnand_write_reg(struct brcmnand_controller *ctrl,
 				      enum brcmnand_reg reg, u32 val)
 {
 	u16 offs = ctrl->reg_offsets[reg];
+
+	nanddbg(ctrl->dev, "%s: reg=%s val=%x\n", __func__, reg2str(reg), val);
 
 	if (offs)
 		nand_writereg(ctrl, offs, val);
@@ -682,8 +820,10 @@ static inline u32 brcmnand_spare_area_mask(struct brcmnand_controller *ctrl)
 		return GENMASK(7, 0);
 	else if (ctrl->nand_version >= 0x0600)
 		return GENMASK(6, 0);
-	else
+	else if (ctrl->nand_version >= 0x0400)
 		return GENMASK(5, 0);
+	else
+		return GENMASK(4, 0);
 }
 
 #define NAND_ACC_CONTROL_ECC_SHIFT	16
@@ -702,12 +842,14 @@ static inline u32 brcmnand_ecc_level_mask(struct brcmnand_controller *ctrl)
 	return mask;
 }
 
-static void brcmnand_set_ecc_enabled(struct brcmnand_host *host, int en)
+static inline void _brcmnand_set_ecc_enabled(struct brcmnand_host *host, int en)
 {
 	struct brcmnand_controller *ctrl = host->ctrl;
 	u16 offs = brcmnand_cs_offset(ctrl, host->cs, BRCMNAND_CS_ACC_CONTROL);
 	u32 acc_control = nand_readreg(ctrl, offs);
 	u32 ecc_flags = ACC_CONTROL_WR_ECC | ACC_CONTROL_RD_ECC;
+
+	nanddbg(ctrl->dev, "%s: en=%d\n", __func__, en);
 
 	if (en) {
 		acc_control |= ecc_flags; /* enable RD/WR ECC */
@@ -719,6 +861,16 @@ static void brcmnand_set_ecc_enabled(struct brcmnand_host *host, int en)
 	}
 
 	nand_writereg(ctrl, offs, acc_control);
+}
+
+static void brcmnand_set_ecc_enabled(struct brcmnand_host *host, int en)
+{
+	struct brcmnand_controller *ctrl = host->ctrl;
+
+	nanddbg(ctrl->dev, "%s: en=%d\n", __func__, en);
+
+	if (ctrl->nand_version >= 0x0300)
+		_brcmnand_set_ecc_enabled(host, en);
 }
 
 static inline int brcmnand_sector_1k_shift(struct brcmnand_controller *ctrl)
@@ -890,6 +1042,7 @@ static inline bool is_hamming_ecc(struct brcmnand_controller *ctrl,
 			(cfg->spare_area_size == 28 && cfg->ecc_level == 16));
 }
 
+#ifdef CONFIG_SYS_NAND_DRIVER_ECC_LAYOUT
 /*
  * Returns a nand_ecclayout strucutre for the given layout/configuration.
  * Returns NULL on failure.
@@ -997,9 +1150,11 @@ static struct nand_ecclayout *brcmnand_create_layout(int ecc_level,
 
 	return layout;
 }
+#endif /* CONFIG_SYS_NAND_DRIVER_ECC_LAYOUT */
 
 static struct nand_ecclayout *brcmstb_choose_ecc_layout(
 		struct brcmnand_host *host)
+#ifdef CONFIG_SYS_NAND_DRIVER_ECC_LAYOUT
 {
 	struct nand_ecclayout *layout;
 	struct brcmnand_cfg *p = &host->hwcfg;
@@ -1017,6 +1172,23 @@ static struct nand_ecclayout *brcmstb_choose_ecc_layout(
 
 	return layout;
 }
+#else
+{	
+	struct mtd_info *mtd = nand_to_mtd(&host->chip);
+	struct nand_ecclayout *layout = NULL;
+
+	switch (mtd->oobsize) {
+		case 16:
+			layout = &brcmnand_oob_16;
+			break;
+		default:
+			dev_err(&host->pdev->dev, "OOB size invalid\n");
+			break;
+	}
+
+	return layout;
+}
+#endif /* CONFIG_SYS_NAND_DRIVER_ECC_LAYOUT */
 
 static void brcmnand_wp(struct mtd_info *mtd, int wp)
 {
@@ -1120,6 +1292,8 @@ static int read_oob_from_regs(struct brcmnand_controller *ctrl, int i, u8 *oob,
 	int tbytes = sas << sector_1k;
 	int j;
 
+	nanddbg(ctrl->dev, "%s: i=%i oob=%p sas=%d sector_1k=%d\n", __func__, i, oob, sas, sector_1k);
+
 	/* Adjust OOB values for 1K sector size */
 	if (sector_1k && (i & 0x01))
 		tbytes = max(0, tbytes - (int)ctrl->max_oob);
@@ -1196,7 +1370,7 @@ static void brcmnand_send_cmd(struct brcmnand_host *host, int cmd)
 	struct brcmnand_controller *ctrl = host->ctrl;
 	int ret;
 
-	dev_dbg(ctrl->dev, "send native cmd %d addr_lo 0x%x\n", cmd,
+	nanddbg(ctrl->dev, "%s: send native cmd %d addr_lo 0x%x\n", __func__, cmd,
 		brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS));
 	BUG_ON(ctrl->cmd_pending != 0);
 	ctrl->cmd_pending = cmd;
@@ -1217,6 +1391,7 @@ static void brcmnand_cmd_ctrl(struct mtd_info *mtd, int dat,
 	unsigned int ctrl)
 {
 	/* intentionally left blank */
+	nanddbg(ctrl->dev, "%s: dat=%d ctrl=%u\n", __func__, dat, ctrl);
 }
 
 static int brcmnand_waitfunc(struct mtd_info *mtd, struct nand_chip *this)
@@ -1224,6 +1399,8 @@ static int brcmnand_waitfunc(struct mtd_info *mtd, struct nand_chip *this)
 	struct nand_chip *chip = mtd_to_nand(mtd);
 	struct brcmnand_host *host = nand_get_controller_data(chip);
 	struct brcmnand_controller *ctrl = host->ctrl;
+
+	nanddbg(ctrl->dev, "%s:\n", __func__);
 
 #ifndef __UBOOT__
 	unsigned long timeo = msecs_to_jiffies(100);
@@ -1312,6 +1489,18 @@ static void brcmnand_cmdfunc(struct mtd_info *mtd, unsigned command,
 	struct brcmnand_controller *ctrl = host->ctrl;
 	u64 addr = (u64)page_addr << chip->page_shift;
 	int native_cmd = 0;
+
+	/* Commands not supported on controller < v4.0 */
+	if (ctrl->nand_version < 0x0400) {
+		switch (command) {
+		case NAND_CMD_GET_FEATURES:
+		case NAND_CMD_PARAM:
+		case NAND_CMD_RNDOUT:
+		case NAND_CMD_SET_FEATURES:
+			dev_err(ctrl->dev, "cmd 0x%x not supported\n", command);
+			return;
+		}
+	}
 
 	if (command == NAND_CMD_READID || command == NAND_CMD_PARAM ||
 			command == NAND_CMD_RNDOUT)
@@ -1427,6 +1616,8 @@ static uint8_t brcmnand_read_byte(struct mtd_info *mtd)
 	uint8_t ret = 0;
 	int addr, offs;
 
+	nanddbg(ctrl->dev, "%s:\n", __func__);
+
 	switch (host->last_cmd) {
 	case NAND_CMD_READID:
 		if (host->last_byte < 4)
@@ -1480,6 +1671,8 @@ static void brcmnand_read_buf(struct mtd_info *mtd, uint8_t *buf, int len)
 {
 	int i;
 
+	nanddbg(ctrl->dev, "%s:\n", __func__);
+
 	for (i = 0; i < len; i++, buf++)
 		*buf = brcmnand_read_byte(mtd);
 }
@@ -1490,6 +1683,8 @@ static void brcmnand_write_buf(struct mtd_info *mtd, const uint8_t *buf,
 	int i;
 	struct nand_chip *chip = mtd_to_nand(mtd);
 	struct brcmnand_host *host = nand_get_controller_data(chip);
+
+	nanddbg(ctrl->dev, "%s:\n", __func__);
 
 	switch (host->last_cmd) {
 	case NAND_CMD_SET_FEATURES:
@@ -1604,6 +1799,8 @@ static int brcmnand_read_by_pio(struct mtd_info *mtd, struct nand_chip *chip,
 	struct brcmnand_host *host = nand_get_controller_data(chip);
 	struct brcmnand_controller *ctrl = host->ctrl;
 	int i, j, ret = 0;
+
+	nanddbg(ctrl->dev, "%s: host=%p addr=%llx trans=%u buf=%p oob=%p err_addr=%p\n", __func__, host, addr, trans, buf, oob, err_addr);
 
 	/* Clear error addresses */
 	brcmnand_write_reg(ctrl, BRCMNAND_UNCORR_ADDR, 0);
@@ -1723,6 +1920,8 @@ static int brcmnand_read(struct mtd_info *mtd, struct nand_chip *chip,
 	int err;
 	bool retry = true;
 
+	nanddbg(ctrl->dev, "%s: addr=%llx trans=%u buf=%p oob=%p\n", __func__, addr, trans, buf, oob);
+
 	dev_dbg(ctrl->dev, "read %llx -> %p\n", (unsigned long long)addr, buf);
 
 try_dmaread:
@@ -1752,6 +1951,8 @@ try_dmaread:
 	err = brcmnand_read_by_pio(mtd, chip, addr, trans, buf,
 							   oob, &err_addr);
 #endif /* __UBOOT__ */
+
+	nanddbg(ctrl->dev, "%s: 1\n", __func__);
 
 	if (mtd_is_eccerr(err)) {
 		/*
@@ -1789,6 +1990,8 @@ try_dmaread:
 		return 0;
 	}
 
+	nanddbg(ctrl->dev, "%s: 2\n", __func__);
+
 	if (mtd_is_bitflip(err)) {
 		unsigned int corrected = brcmnand_count_corrected(ctrl);
 
@@ -1799,6 +2002,8 @@ try_dmaread:
 		return max(mtd->bitflip_threshold, corrected);
 	}
 
+	nanddbg(ctrl->dev, "%s: 3\n", __func__);
+
 	return 0;
 }
 
@@ -1807,6 +2012,8 @@ static int brcmnand_read_page(struct mtd_info *mtd, struct nand_chip *chip,
 {
 	struct brcmnand_host *host = nand_get_controller_data(chip);
 	u8 *oob = oob_required ? (u8 *)chip->oob_poi : NULL;
+
+	nanddbg(ctrl->dev, "%s: buf=%p, oob_required=%d page=%d\n", __func__, buf, oob_required, page);
 
 	nand_read_page_op(chip, page, 0, NULL, 0);
 
@@ -1821,6 +2028,8 @@ static int brcmnand_read_page_raw(struct mtd_info *mtd, struct nand_chip *chip,
 	u8 *oob = oob_required ? (u8 *)chip->oob_poi : NULL;
 	int ret;
 
+	nanddbg(ctrl->dev, "%s:\n", __func__);
+
 	nand_read_page_op(chip, page, 0, NULL, 0);
 
 	brcmnand_set_ecc_enabled(host, 0);
@@ -1833,6 +2042,8 @@ static int brcmnand_read_page_raw(struct mtd_info *mtd, struct nand_chip *chip,
 static int brcmnand_read_oob(struct mtd_info *mtd, struct nand_chip *chip,
 			     int page)
 {
+	nanddbg(ctrl->dev, "%s: page=%d\n", __func__, page);
+
 	return brcmnand_read(mtd, chip, (u64)page << chip->page_shift,
 			mtd->writesize >> FC_SHIFT,
 			NULL, (u8 *)chip->oob_poi);
@@ -1842,6 +2053,8 @@ static int brcmnand_read_oob_raw(struct mtd_info *mtd, struct nand_chip *chip,
 				 int page)
 {
 	struct brcmnand_host *host = nand_get_controller_data(chip);
+
+	nanddbg(ctrl->dev, "%s: page=%d\n", __func__, page);
 
 	brcmnand_set_ecc_enabled(host, 0);
 	brcmnand_read(mtd, chip, (u64)page << chip->page_shift,
@@ -1858,6 +2071,8 @@ static int brcmnand_write(struct mtd_info *mtd, struct nand_chip *chip,
 	struct brcmnand_controller *ctrl = host->ctrl;
 	unsigned int i, j, trans = mtd->writesize >> FC_SHIFT;
 	int status, ret = 0;
+
+	nanddbg(ctrl->dev, "%s:\n", __func__);
 
 	dev_dbg(ctrl->dev, "write %llx <- %p\n", (unsigned long long)addr, buf);
 
@@ -1930,6 +2145,8 @@ static int brcmnand_write_page(struct mtd_info *mtd, struct nand_chip *chip,
 	struct brcmnand_host *host = nand_get_controller_data(chip);
 	void *oob = oob_required ? chip->oob_poi : NULL;
 
+	nanddbg(ctrl->dev, "%s:\n", __func__);
+
 	nand_prog_page_begin_op(chip, page, 0, NULL, 0);
 	brcmnand_write(mtd, chip, host->last_addr, (const u32 *)buf, oob);
 
@@ -1943,6 +2160,8 @@ static int brcmnand_write_page_raw(struct mtd_info *mtd,
 	struct brcmnand_host *host = nand_get_controller_data(chip);
 	void *oob = oob_required ? chip->oob_poi : NULL;
 
+	nanddbg(ctrl->dev, "%s:\n", __func__);
+
 	nand_prog_page_begin_op(chip, page, 0, NULL, 0);
 	brcmnand_set_ecc_enabled(host, 0);
 	brcmnand_write(mtd, chip, host->last_addr, (const u32 *)buf, oob);
@@ -1954,6 +2173,8 @@ static int brcmnand_write_page_raw(struct mtd_info *mtd,
 static int brcmnand_write_oob(struct mtd_info *mtd, struct nand_chip *chip,
 				  int page)
 {
+	nanddbg(ctrl->dev, "%s:\n", __func__);
+
 	return brcmnand_write(mtd, chip, (u64)page << chip->page_shift,
 				  NULL, chip->oob_poi);
 }
@@ -1963,6 +2184,8 @@ static int brcmnand_write_oob_raw(struct mtd_info *mtd, struct nand_chip *chip,
 {
 	struct brcmnand_host *host = nand_get_controller_data(chip);
 	int ret;
+
+	nanddbg(ctrl->dev, "%s:\n", __func__);
 
 	brcmnand_set_ecc_enabled(host, 0);
 	ret = brcmnand_write(mtd, chip, (u64)page << chip->page_shift, NULL,
@@ -2069,7 +2292,8 @@ static int brcmnand_set_cfg(struct brcmnand_host *host,
 	brcmnand_set_sector_size_1k(host, cfg->sector_size_1k);
 
 	/* threshold = ceil(BCH-level * 0.75) */
-	brcmnand_wr_corr_thresh(host, DIV_ROUND_UP(chip->ecc.strength * 3, 4));
+	if (ctrl->reg_offsets[BRCMNAND_CORR_THRESHOLD])
+		brcmnand_wr_corr_thresh(host, DIV_ROUND_UP(chip->ecc.strength * 3, 4));
 
 	return 0;
 }
@@ -2217,7 +2441,8 @@ static int brcmnand_setup_dev(struct brcmnand_host *host)
 	/* Configure ACC_CONTROL */
 	offs = brcmnand_cs_offset(ctrl, host->cs, BRCMNAND_CS_ACC_CONTROL);
 	tmp = nand_readreg(ctrl, offs);
-	tmp &= ~ACC_CONTROL_PARTIAL_PAGE;
+	if (ctrl->features & BRCMNAND_HAS_PARTIAL_PAGE)
+		tmp &= ~ACC_CONTROL_PARTIAL_PAGE;
 	tmp &= ~ACC_CONTROL_RD_ERASED;
 
 	/* We need to turn on Read from erased paged protected by ECC */
@@ -2228,6 +2453,81 @@ static int brcmnand_setup_dev(struct brcmnand_host *host)
 		tmp &= ~ACC_CONTROL_PREFETCH;
 
 	nand_writereg(ctrl, offs, tmp);
+
+#if 0
+	{
+		static uint32_t buffer[0x1000];
+		uint8_t *ptr = (uint8_t *) buffer;
+		u64 err_addr = 0;
+		int i;
+		int j = 0;
+		int end;
+
+		ret = brcmnand_read_by_pio(mtd, chip, 0x0, 4, buffer, NULL, &err_addr);
+
+		for (end = 0x1000; end > 0; end--)
+		{
+			if (buffer[end] != 0)
+			{
+				break;
+			}
+		}
+
+		end = end * sizeof(uint32_t);
+		while (end % 16)
+		{
+			end++;
+		}
+
+		for (i = 0; i < end; i++)
+		{
+			if (i && i % 16 == 0)
+			{
+				nanddbg(ctrl->dev, "\t |");
+				
+				while (j < i)
+				{
+					char c = ptr[j];
+
+					if (c < 0x20 || c >= 0x7f)
+					{
+						c = ' ';
+					}
+
+					nanddbg(ctrl->dev, "%c", c);
+
+					j++;
+				}
+
+				nanddbg(ctrl->dev, "|\n");
+
+				j = i;
+			}
+
+			nanddbg(ctrl->dev, " %02x", ptr[i]);
+		}
+
+		if (j != i)
+		{
+			nanddbg(ctrl->dev, "\t |");
+			while (j < i)
+			{
+				char c = ptr[j];
+
+				if (c < 0x20 || c >= 0x7f)
+				{
+					c = ' ';
+				}
+
+				nanddbg(ctrl->dev, "%c", c);
+
+				j++;
+			}
+
+			nanddbg(ctrl->dev, "|\n");
+		}
+	}
+#endif
 
 	return 0;
 }
@@ -2714,6 +3014,8 @@ int brcmnand_probe(struct udevice *dev, struct brcmnand_soc *soc)
 	}
 #endif /* __UBOOT__ */
 
+	return ret;
+
 err:
 #ifndef __UBOOT__
 	clk_disable_unprepare(ctrl->clk);
@@ -2722,7 +3024,6 @@ err:
 		clk_disable(ctrl->clk);
 #endif /* __UBOOT__ */
 	return ret;
-
 }
 EXPORT_SYMBOL_GPL(brcmnand_probe);
 

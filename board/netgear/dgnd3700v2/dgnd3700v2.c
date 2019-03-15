@@ -12,6 +12,9 @@
 #define GPIO_MODE_6362_SERIAL_LED_DATA	BIT(2)
 #define GPIO_MODE_6362_SERIAL_LED_CLK	BIT(3)
 
+#define GPIO_BASE_MODE_6362_REG		0x38
+#define GPIO_BASE_MODE_NAND_OVERRIDE	BIT(2)
+
 #ifdef CONFIG_BOARD_EARLY_INIT_F
 int board_early_init_f(void)
 {
@@ -21,6 +24,10 @@ int board_early_init_f(void)
 	setbits_be32(gpio_regs + GPIO_MODE_6362_REG,
 		     GPIO_MODE_6362_SERIAL_LED_DATA |
 		     GPIO_MODE_6362_SERIAL_LED_CLK);
+
+	/* Enable NAND */
+	setbits_be32(gpio_regs + GPIO_BASE_MODE_6362_REG,
+		     GPIO_BASE_MODE_NAND_OVERRIDE);
 
 	return 0;
 }
