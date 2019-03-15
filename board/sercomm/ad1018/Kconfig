@@ -1,0 +1,12 @@
+if BOARD_SERCOMM_AD1018
+
+config SYS_BOARD
+	default "ad1018"
+
+config SYS_VENDOR
+	default "sercomm"
+
+config SYS_CONFIG_NAME
+	default "sercomm_ad1018"
+
+endif

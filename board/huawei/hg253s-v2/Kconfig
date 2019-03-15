@@ -1,0 +1,12 @@
+if BOARD_HUAWEI_HG253S_V2
+
+config SYS_BOARD
+	default "hg253s-v2"
+
+config SYS_VENDOR
+	default "huawei"
+
+config SYS_CONFIG_NAME
+	default "huawei_hg253s-v2"
+
+endif

@@ -6,27 +6,11 @@
 #include <linux/types.h>
 #include <linux/io.h>
 
-struct brcmnand_soc {
-	bool (*ctlrdy_ack)(struct brcmnand_soc *soc);
-	void (*ctlrdy_set_enabled)(struct brcmnand_soc *soc, bool en);
-	void (*prepare_data_bus)(struct brcmnand_soc *soc, bool prepare,
-				 bool is_param);
+struct bln_soc {
+	bool (*ctlrdy_ack)(struct bln_soc *soc);
+	void (*ctlrdy_set_enabled)(struct bln_soc *soc, bool en);
 	void *ctrl;
 };
-
-static inline void brcmnand_soc_data_bus_prepare(struct brcmnand_soc *soc,
-						 bool is_param)
-{
-	if (soc && soc->prepare_data_bus)
-		soc->prepare_data_bus(soc, true, is_param);
-}
-
-static inline void brcmnand_soc_data_bus_unprepare(struct brcmnand_soc *soc,
-						   bool is_param)
-{
-	if (soc && soc->prepare_data_bus)
-		soc->prepare_data_bus(soc, false, is_param);
-}
 
 static inline u32 brcmnand_readl(void __iomem *addr)
 {
@@ -53,8 +37,8 @@ static inline void brcmnand_writel(u32 val, void __iomem *addr)
 		writel_relaxed(val, addr);
 }
 
-int brcmnand_probe(struct udevice *dev, struct brcmnand_soc *soc);
-int brcmnand_remove(struct udevice *dev);
+int bln_probe(struct udevice *dev, struct bln_soc *soc);
+int bln_remove(struct udevice *dev);
 
 #ifndef __UBOOT__
 extern const struct dev_pm_ops brcmnand_pm_ops;

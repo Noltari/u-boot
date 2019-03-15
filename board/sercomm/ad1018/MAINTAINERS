@@ -1,0 +1,7 @@
+SERCOMM AD1018 BOARD
+M:	Álvaro Fernández Rojas <noltari@gmail.com>
+S:	Maintained
+F:	board/sercomm/ad1018/
+F:	include/configs/sercomm_ad1018.h
+F:	configs/sercomm_ad1018_ram_defconfig
+F:	configs/sercomm_ad1018_rom_defconfig

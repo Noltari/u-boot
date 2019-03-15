@@ -12,7 +12,7 @@
 #include "brcmnand.h"
 
 struct bcm6368_nand_soc {
-	struct brcmnand_soc soc;
+	struct bln_soc soc;
 	void __iomem *base;
 };
 
@@ -35,7 +35,7 @@ enum {
 	BCM6368_ECC_ERR_CORR	= BIT(7),
 };
 
-static bool bcm6368_nand_intc_ack(struct brcmnand_soc *soc)
+static bool bcm6368_nand_intc_ack(struct bln_soc *soc)
 {
 	struct bcm6368_nand_soc *priv = soc_to_priv(soc);
 	void __iomem *mmio = priv->base + BCM6368_NAND_INT;
@@ -52,7 +52,7 @@ static bool bcm6368_nand_intc_ack(struct brcmnand_soc *soc)
 	return false;
 }
 
-static void bcm6368_nand_intc_set(struct brcmnand_soc *soc, bool en)
+static void bcm6368_nand_intc_set(struct bln_soc *soc, bool en)
 {
 	struct bcm6368_nand_soc *priv = soc_to_priv(soc);
 	void __iomem *mmio = priv->base + BCM6368_NAND_INT;
@@ -72,7 +72,7 @@ static void bcm6368_nand_intc_set(struct brcmnand_soc *soc, bool en)
 static int bcm6368_nand_probe(struct udevice *dev)
 {
 	struct bcm6368_nand_soc *priv = dev_get_priv(dev);
-	struct brcmnand_soc *soc = &priv->soc;
+	struct bln_soc *soc = &priv->soc;
 
 	priv->base = dev_remap_addr_name(dev, "nand-int-base");
 	if (!priv->base)
@@ -86,7 +86,7 @@ static int bcm6368_nand_probe(struct udevice *dev)
 	brcmnand_writel(BCM6368_NAND_STATUS_MASK,
 			priv->base + BCM6368_NAND_INT);
 
-	return brcmnand_probe(dev, soc);
+	return bln_probe(dev, soc);
 }
 
 static const struct udevice_id bcm6368_nand_dt_ids[] = {
