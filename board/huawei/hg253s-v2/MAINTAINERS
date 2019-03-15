@@ -1,0 +1,7 @@
+HUAWEI HG253s v2 BOARD
+M:	Álvaro Fernández Rojas <noltari@gmail.com>
+S:	Maintained
+F:	board/hauwei/hg253s-v2/
+F:	include/configs/hg253s-v2.h
+F:	configs/hauwei_hg253s-v2_ram_defconfig
+F:	configs/hauwei_hg253s-v2_rom_defconfig

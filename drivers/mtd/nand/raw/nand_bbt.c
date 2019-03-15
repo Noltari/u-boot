@@ -179,6 +179,8 @@ static int read_bbt(struct mtd_info *mtd, uint8_t *buf, int page, int num,
 	u32 marker_len;
 	int reserved_block_code = td->reserved_block_code;
 
+	printk("%s\n", __func__);
+
 	totlen = (num * bits) >> 3;
 	marker_len = add_marker_len(td);
 	from = ((loff_t)page) << this->page_shift;
@@ -265,6 +267,8 @@ static int read_abs_bbt(struct mtd_info *mtd, uint8_t *buf, struct nand_bbt_desc
 	struct nand_chip *this = mtd_to_nand(mtd);
 	int res = 0, i;
 
+	printk("%s\n", __func__);
+
 	if (td->options & NAND_BBT_PERCHIP) {
 		int offs = 0;
 		for (i = 0; i < this->numchips; i++) {
@@ -292,6 +296,8 @@ static int scan_read_data(struct mtd_info *mtd, uint8_t *buf, loff_t offs,
 	size_t retlen;
 	size_t len;
 
+	printk("%s\n", __func__);
+
 	len = td->len;
 	if (td->options & NAND_BBT_VERSION)
 		len++;
@@ -315,6 +321,8 @@ static int scan_read_oob(struct mtd_info *mtd, uint8_t *buf, loff_t offs,
 {
 	struct mtd_oob_ops ops;
 	int res, ret = 0;
+
+	printk("%s\n", __func__);
 
 	ops.mode = MTD_OPS_PLACE_OOB;
 	ops.ooboffs = 0;
@@ -343,6 +351,8 @@ static int scan_read_oob(struct mtd_info *mtd, uint8_t *buf, loff_t offs,
 static int scan_read(struct mtd_info *mtd, uint8_t *buf, loff_t offs,
 			 size_t len, struct nand_bbt_descr *td)
 {
+	printk("%s\n", __func__);
+
 	if (td->options & NAND_BBT_NO_OOB)
 		return scan_read_data(mtd, buf, offs, td);
 	else
@@ -354,6 +364,8 @@ static int scan_write_bbt(struct mtd_info *mtd, loff_t offs, size_t len,
 			  uint8_t *buf, uint8_t *oob)
 {
 	struct mtd_oob_ops ops;
+
+	printk("%s\n", __func__);
 
 	ops.mode = MTD_OPS_PLACE_OOB;
 	ops.ooboffs = 0;
@@ -389,6 +401,8 @@ static void read_abs_bbts(struct mtd_info *mtd, uint8_t *buf,
 {
 	struct nand_chip *this = mtd_to_nand(mtd);
 
+	printk("%s\n", __func__);
+
 	/* Read the primary version, if available */
 	if (td->options & NAND_BBT_VERSION) {
 		scan_read(mtd, buf, (loff_t)td->pages[0] << this->page_shift,
@@ -415,6 +429,8 @@ static int scan_block_fast(struct mtd_info *mtd, struct nand_bbt_descr *bd,
 	struct mtd_oob_ops ops;
 	int j, ret;
 
+	printk("%s offs=%llx numpages=%d\n", __func__, offs, numpages);
+
 	ops.ooblen = mtd->oobsize;
 	ops.oobbuf = buf;
 	ops.ooboffs = 0;
@@ -428,11 +444,15 @@ static int scan_block_fast(struct mtd_info *mtd, struct nand_bbt_descr *bd,
 		 */
 		ret = mtd_read_oob(mtd, offs, &ops);
 		/* Ignore ECC errors when checking for BBM */
-		if (ret && !mtd_is_bitflip_or_eccerr(ret))
+		if (ret && !mtd_is_bitflip_or_eccerr(ret)) {
+			printk("%s: ignore ECC err\n", __func__);
 			return ret;
+		}
 
-		if (check_short_pattern(buf, bd))
+		if (check_short_pattern(buf, bd)) {
+			printk("%s: short pattern err err\n", __func__);
 			return 1;
+		}
 
 		offs += mtd->writesize;
 	}
@@ -457,6 +477,8 @@ static int create_bbt(struct mtd_info *mtd, uint8_t *buf,
 	int i, numblocks, numpages;
 	int startblock;
 	loff_t from;
+
+	printk("%s\n", __func__);
 
 	pr_info("Scanning device for bad blocks\n");
 
@@ -495,7 +517,7 @@ static int create_bbt(struct mtd_info *mtd, uint8_t *buf,
 
 		if (ret) {
 			bbt_mark_entry(this, i, BBT_BLOCK_FACTORY_BAD);
-			pr_warn("Bad eraseblock %d at 0x%012llx\n",
+			printk("Bad eraseblock %d at 0x%012llx\n",
 				i, (unsigned long long)from);
 			mtd->ecc_stats.badblocks++;
 		}
@@ -528,6 +550,8 @@ static int search_bbt(struct mtd_info *mtd, uint8_t *buf, struct nand_bbt_descr 
 	int scanlen = mtd->writesize + mtd->oobsize;
 	int bbtblocks;
 	int blocktopage = this->bbt_erase_shift - this->page_shift;
+
+	printk("%s\n", __func__);
 
 	/* Search direction top -> down? */
 	if (td->options & NAND_BBT_LASTBLOCK) {
@@ -595,8 +619,12 @@ static void search_read_bbts(struct mtd_info *mtd, uint8_t *buf,
 			     struct nand_bbt_descr *td,
 			     struct nand_bbt_descr *md)
 {
+	printk("%s\n", __func__);
+
 	/* Search the primary table */
 	search_bbt(mtd, buf, td);
+
+	printk("%s\n", __func__);
 
 	/* Search the mirror table */
 	if (md)
@@ -627,6 +655,8 @@ static int write_bbt(struct mtd_info *mtd, uint8_t *buf,
 	size_t retlen, len = 0;
 	loff_t to;
 	struct mtd_oob_ops ops;
+
+	printk("%s\n", __func__);
 
 	ops.ooblen = mtd->oobsize;
 	ops.ooboffs = 0;
@@ -820,6 +850,8 @@ static inline int nand_memory_bbt(struct mtd_info *mtd, struct nand_bbt_descr *b
 {
 	struct nand_chip *this = mtd_to_nand(mtd);
 
+	printk("%s\n", __func__);
+
 	return create_bbt(mtd, this->buffers->databuf, bd, -1);
 }
 
@@ -841,6 +873,8 @@ static int check_create(struct mtd_info *mtd, uint8_t *buf, struct nand_bbt_desc
 	struct nand_bbt_descr *td = this->bbt_td;
 	struct nand_bbt_descr *md = this->bbt_md;
 	struct nand_bbt_descr *rd, *rd2;
+
+	printk("%s\n", __func__);
 
 	/* Do we have a bbt per chip? */
 	if (td->options & NAND_BBT_PERCHIP)
@@ -965,6 +999,8 @@ static void mark_bbt_region(struct mtd_info *mtd, struct nand_bbt_descr *td)
 	int i, j, chips, block, nrblocks, update;
 	uint8_t oldval;
 
+	printk("%s\n", __func__);
+
 	/* Do we have a bbt per chip? */
 	if (td->options & NAND_BBT_PERCHIP) {
 		chips = this->numchips;
@@ -1026,6 +1062,8 @@ static void verify_bbt_descr(struct mtd_info *mtd, struct nand_bbt_descr *bd)
 	u32 bits;
 	u32 table_size;
 
+	printk("%s\n", __func__);
+
 	if (!bd)
 		return;
 
@@ -1078,6 +1116,8 @@ static int nand_scan_bbt(struct mtd_info *mtd, struct nand_bbt_descr *bd)
 	uint8_t *buf;
 	struct nand_bbt_descr *td = this->bbt_td;
 	struct nand_bbt_descr *md = this->bbt_md;
+
+	printk("%s\n", __func__);
 
 	len = (mtd->size >> (this->bbt_erase_shift + 2)) ? : 1;
 	/*
@@ -1152,6 +1192,8 @@ static int nand_update_bbt(struct mtd_info *mtd, loff_t offs)
 	uint8_t *buf;
 	struct nand_bbt_descr *td = this->bbt_td;
 	struct nand_bbt_descr *md = this->bbt_md;
+
+	printk("%s: offs=%llx\n", __func__, offs);
 
 	if (!this->bbt || !td)
 		return -EINVAL;

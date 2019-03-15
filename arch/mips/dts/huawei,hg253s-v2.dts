@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Copyright (C) 2020 Álvaro Fernández Rojas <noltari@gmail.com>
+ */
+
+/dts-v1/;
+
+#include "brcm,bcm6362.dtsi"
+
+/ {
+	model = "Huawei HG253s v2";
+	compatible = "huawei,hg253s-v2", "brcm,bcm6362";
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+
+		inet_green {
+			label = "HG253s-v2:green:inet";
+			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+		};
+
+		wifi_green {
+			label = "HG253s-v2:green:wifi";
+			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+		};
+
+		phone_green {
+			label = "HG253s-v2:green:phone";
+			gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;
+		};
+
+		usb_green {
+			label = "HG253s-v2:green:usb";
+			gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
+		};
+	};
+};
+
+&ehci {
+	status = "okay";
+};
+
+&enet {
+	status = "okay";
+	brcm,rgmii-timing;
+
+	port@4 {
+		compatible = "brcm,enetsw-port";
+		reg = <4>;
+		label = "rgmii";
+		brcm,phy-id = <0xff>;
+		speed = <1000>;
+		full-duplex;
+		bypass-link;
+	};
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&nand {
+	status = "okay";
+
+	/*
+	brcm,nand-has-wp;
+	write-protect = <2>;
+	*/
+
+	nandcs@0 {
+		compatible = "brcm,nandcs";
+		reg = <0>;
+		nand-ecc-strength = <15>;
+		nand-ecc-step-size = <512>;
+		/* nand-on-flash-bbt; */
+		brcm,nand-oob-sector-size = <64>;
+	};
+};
+
+&ohci {
+	status = "okay";
+};
+
+&uart0 {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};
+
+&usbh {
+	status = "okay";
+};
